@@ -1,26 +1,116 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Phone Viewer</title>
+    <title>Phone Screen Viewer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
     <style>
-        body { margin: 0; background: #222; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; }
-        #remoteVideo { max-width: 90vw; max-height: 80vh; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        #controls { margin-top: 20px; display: flex; gap: 10px; }
-        input { padding: 10px 15px; font-size: 16px; border-radius: 5px; border: none; width: 200px; text-align: center; }
-        button { padding: 10px 20px; font-size: 16px; border-radius: 5px; border: none; background: #4CAF50; color: white; cursor: pointer; }
-        button:hover { background: #45a049; }
-        #status { color: white; margin-top: 10px; }
+        body { 
+            margin: 0; 
+            background: #1a1a1a; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            justify-content: center; 
+            min-height: 100vh; 
+            font-family: 'Segoe UI', sans-serif;
+            color: white;
+        }
+        #remoteVideo { 
+            max-width: 95vw; 
+            max-height: 85vh; 
+            border-radius: 20px; 
+            box-shadow: 0 20px 60px rgba(0,0,0,0.8);
+            background: #000;
+            border: 3px solid #333;
+        }
+        #controls { 
+            margin-top: 20px; 
+            display: flex; 
+            gap: 15px; 
+            align-items: center;
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 15px;
+        }
+        input { 
+            padding: 12px 20px; 
+            font-size: 24px; 
+            border-radius: 10px; 
+            border: 2px solid #444; 
+            width: 180px; 
+            text-align: center;
+            font-family: monospace;
+            font-weight: bold;
+            text-transform: uppercase;
+            background: #222;
+            color: white;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button { 
+            padding: 12px 30px; 
+            font-size: 18px; 
+            border-radius: 10px; 
+            border: none; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; 
+            cursor: pointer;
+            font-weight: bold;
+            transition: transform 0.2s;
+        }
+        button:hover { 
+            transform: scale(1.05);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        #status { 
+            margin-top: 15px; 
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            min-height: 20px;
+        }
+        .connecting { background: #f59e0b; color: #000; }
+        .connected { background: #10b981; }
+        .error { background: #ef4444; }
+        #fullscreenBtn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 15px;
+            border-radius: 50%;
+            background: rgba(0,0,0,0.7);
+            border: 2px solid #444;
+            color: white;
+            cursor: pointer;
+            font-size: 20px;
+            display: none;
+        }
+        #fullscreenBtn:hover {
+            background: rgba(102, 126, 234, 0.8);
+        }
+        .hidden { display: none !important; }
     </style>
 </head>
 <body>
     <video id="remoteVideo" autoplay playsinline></video>
-    <div id="controls">
-        <input type="text" id="roomInput" placeholder="Enter room code" maxlength="8">
-        <button onclick="connect()">Connect</button>
-    </div>
-    <div id="status">Enter room code from phone</div>
     
+    <div id="controls">
+        <input type="text" id="roomInput" placeholder="ROOM CODE" maxlength="6">
+        <button id="connectBtn" onclick="connect()">Connect</button>
+    </div>
+    
+    <div id="status">Enter room code from your phone</div>
+    
+    <button id="fullscreenBtn" onclick="toggleFullscreen()" title="Fullscreen">⛶</button>
+
     <script>
         const SIGNAL_SERVER = 'https://your-infinityfree-domain.com/signal.php';
         let peer = null;
@@ -28,52 +118,82 @@
         const myPeerId = 'chromebook-' + Math.random().toString(36).substring(2, 8);
         
         async function connect() {
-            roomCode = document.getElementById('roomInput').value.trim();
-            if (!roomCode) return;
+            roomCode = document.getElementById('roomInput').value.trim().toUpperCase();
+            if (!roomCode || roomCode.length !== 6) {
+                updateStatus('Enter 6-character room code', 'error');
+                return;
+            }
             
-            document.getElementById('status').textContent = 'Connecting...';
+            document.getElementById('connectBtn').disabled = true;
+            updateStatus('Connecting to phone...', 'connecting');
             
-            // Join room
-            await fetch(`${SIGNAL_SERVER}?action=join&room=${roomCode}&peerId=${myPeerId}`);
-            
-            // Initialize WebRTC
-            peer = new SimplePeer({
-                initiator: false,
-                trickle: true
-            });
-            
-            peer.on('signal', async (data) => {
-                if (data.type === 'answer') {
-                    await fetch(`${SIGNAL_SERVER}?action=answer&room=${roomCode}`, {
-                        method: 'POST',
-                        body: JSON.stringify(data)
-                    });
-                } else if (data.candidate) {
-                    await fetch(`${SIGNAL_SERVER}?action=candidate&room=${roomCode}&peerId=${myPeerId}`, {
-                        method: 'POST',
-                        body: JSON.stringify(data)
-                    });
+            try {
+                // Join room
+                const joinRes = await fetch(`${SIGNAL_SERVER}?action=join&room=${roomCode}&peerId=${myPeerId}`);
+                const joinData = await joinRes.json();
+                
+                if (joinData.error) {
+                    updateStatus('Error: ' + joinData.error, 'error');
+                    document.getElementById('connectBtn').disabled = false;
+                    return;
                 }
-            });
-            
-            peer.on('stream', (stream) => {
-                document.getElementById('remoteVideo').srcObject = stream;
-                document.getElementById('status').textContent = 'Connected! Streaming from phone.';
-                document.getElementById('controls').style.display = 'none';
-            });
-            
-            peer.on('connect', () => {
-                document.getElementById('status').textContent = 'Data channel open';
-            });
-            
-            // Poll for offer
-            pollForOffer();
+                
+                // Initialize WebRTC
+                peer = new SimplePeer({
+                    initiator: false,
+                    trickle: true
+                });
+                
+                peer.on('signal', async (data) => {
+                    if (data.type === 'answer') {
+                        await fetch(`${SIGNAL_SERVER}?action=answer&room=${roomCode}`, {
+                            method: 'POST',
+                            body: JSON.stringify(data)
+                        });
+                    } else if (data.candidate) {
+                        await fetch(`${SIGNAL_SERVER}?action=candidate&room=${roomCode}&peerId=${myPeerId}`, {
+                            method: 'POST',
+                            body: JSON.stringify(data)
+                        });
+                    }
+                });
+                
+                peer.on('stream', (stream) => {
+                    const video = document.getElementById('remoteVideo');
+                    video.srcObject = stream;
+                    updateStatus('✅ Connected! Streaming phone screen.', 'connected');
+                    document.getElementById('controls').classList.add('hidden');
+                    document.getElementById('fullscreenBtn').style.display = 'block';
+                });
+                
+                peer.on('close', () => {
+                    updateStatus('Disconnected', 'error');
+                    document.getElementById('controls').classList.remove('hidden');
+                    document.getElementById('fullscreenBtn').style.display = 'none';
+                    document.getElementById('connectBtn').disabled = false;
+                });
+                
+                peer.on('error', (err) => {
+                    updateStatus('Connection error: ' + err.message, 'error');
+                    document.getElementById('connectBtn').disabled = false;
+                });
+                
+                // Poll for offer
+                pollForOffer();
+                
+            } catch(e) {
+                updateStatus('Error: ' + e.message, 'error');
+                document.getElementById('connectBtn').disabled = false;
+            }
         }
         
         async function pollForOffer() {
+            if (!peer || peer.destroyed) return;
+            
             try {
                 const response = await fetch(`${SIGNAL_SERVER}?action=getOffer&room=${roomCode}`);
                 const data = await response.json();
+                
                 if (data.offer && !peer._pc.remoteDescription) {
                     peer.signal(data.offer);
                 }
@@ -81,12 +201,37 @@
                 const candResponse = await fetch(`${SIGNAL_SERVER}?action=getCandidates&room=${roomCode}&peerId=${myPeerId}`);
                 const candData = await candResponse.json();
                 candData.candidates.forEach(cand => peer.signal(cand));
-            } catch(e) {}
+                
+            } catch(e) {
+                console.error('Poll error:', e);
+            }
             
             if (peer && !peer.destroyed) {
                 setTimeout(pollForOffer, 1000);
             }
         }
+        
+        function updateStatus(text, type) {
+            const status = document.getElementById('status');
+            status.textContent = text;
+            status.className = type || '';
+        }
+        
+        function toggleFullscreen() {
+            const video = document.getElementById('remoteVideo');
+            if (!document.fullscreenElement) {
+                video.requestFullscreen().catch(err => {
+                    console.error('Fullscreen error:', err);
+                });
+            } else {
+                document.exitFullscreen();
+            }
+        }
+        
+        // Allow Enter key to connect
+        document.getElementById('roomInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') connect();
+        });
     </script>
 </body>
 </html>
