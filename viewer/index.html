@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Phone Viewer</title>
+    <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
+    <style>
+        body { margin: 0; background: #222; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; }
+        #remoteVideo { max-width: 90vw; max-height: 80vh; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        #controls { margin-top: 20px; display: flex; gap: 10px; }
+        input { padding: 10px 15px; font-size: 16px; border-radius: 5px; border: none; width: 200px; text-align: center; }
+        button { padding: 10px 20px; font-size: 16px; border-radius: 5px; border: none; background: #4CAF50; color: white; cursor: pointer; }
+        button:hover { background: #45a049; }
+        #status { color: white; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <video id="remoteVideo" autoplay playsinline></video>
+    <div id="controls">
+        <input type="text" id="roomInput" placeholder="Enter room code" maxlength="8">
+        <button onclick="connect()">Connect</button>
+    </div>
+    <div id="status">Enter room code from phone</div>
+    
+    <script>
+        const SIGNAL_SERVER = 'https://your-infinityfree-domain.com/signal.php';
+        let peer = null;
+        let roomCode = '';
+        const myPeerId = 'chromebook-' + Math.random().toString(36).substring(2, 8);
+        
+        async function connect() {
+            roomCode = document.getElementById('roomInput').value.trim();
+            if (!roomCode) return;
+            
+            document.getElementById('status').textContent = 'Connecting...';
+            
+            // Join room
+            await fetch(`${SIGNAL_SERVER}?action=join&room=${roomCode}&peerId=${myPeerId}`);
+            
+            // Initialize WebRTC
+            peer = new SimplePeer({
+                initiator: false,
+                trickle: true
+            });
+            
+            peer.on('signal', async (data) => {
+                if (data.type === 'answer') {
+                    await fetch(`${SIGNAL_SERVER}?action=answer&room=${roomCode}`, {
+                        method: 'POST',
+                        body: JSON.stringify(data)
+                    });
+                } else if (data.candidate) {
+                    await fetch(`${SIGNAL_SERVER}?action=candidate&room=${roomCode}&peerId=${myPeerId}`, {
+                        method: 'POST',
+                        body: JSON.stringify(data)
+                    });
+                }
+            });
+            
+            peer.on('stream', (stream) => {
+                document.getElementById('remoteVideo').srcObject = stream;
+                document.getElementById('status').textContent = 'Connected! Streaming from phone.';
+                document.getElementById('controls').style.display = 'none';
+            });
+            
+            peer.on('connect', () => {
+                document.getElementById('status').textContent = 'Data channel open';
+            });
+            
+            // Poll for offer
+            pollForOffer();
+        }
+        
+        async function pollForOffer() {
+            try {
+                const response = await fetch(`${SIGNAL_SERVER}?action=getOffer&room=${roomCode}`);
+                const data = await response.json();
+                if (data.offer && !peer._pc.remoteDescription) {
+                    peer.signal(data.offer);
+                }
+                
+                const candResponse = await fetch(`${SIGNAL_SERVER}?action=getCandidates&room=${roomCode}&peerId=${myPeerId}`);
+                const candData = await candResponse.json();
+                candData.candidates.forEach(cand => peer.signal(cand));
+            } catch(e) {}
+            
+            if (peer && !peer.destroyed) {
+                setTimeout(pollForOffer, 1000);
+            }
+        }
+    </script>
+</body>
+</html>
