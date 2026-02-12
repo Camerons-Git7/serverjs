@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Phone Stream</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; }
+        video { width: 100vw; height: 100vh; object-fit: cover; }
+        #status { position: fixed; top: 10px; left: 10px; color: white; background: rgba(0,0,0,0.5); padding: 10px; }
+    </style>
+</head>
+<body>
+    <video id="localVideo" autoplay playsinline muted></video>
+    <div id="status">Initializing...</div>
+    
+    <script>
+        const SIGNAL_SERVER = 'https://your-infinityfree-domain.com/signal.php';
+        const roomCode = new URLSearchParams(location.search).get('room') || Math.random().toString(36).substring(2, 8);
+        const myPeerId = 'phone-' + Math.random().toString(36).substring(2, 8);
+        
+        let peer = null;
+        let stream = null;
+        
+        async function init() {
+            document.getElementById('status').textContent = 'Room: ' + roomCode;
+            
+            // Get camera + screen
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'environment' }, // Use back camera
+                    audio: false 
+                });
+                document.getElementById('localVideo').srcObject = stream;
+            } catch(e) {
+                // Fallback to screen share if available
+                try {
+                    stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+                    document.getElementById('localVideo').srcObject = stream;
+                } catch(e2) {
+                    alert('Camera/screen access denied');
+                    return;
+                }
+            }
+            
+            // Create room on signaling server
+            await fetch(`${SIGNAL_SERVER}?action=create&room=${roomCode}&peerId=${myPeerId}`);
+            
+            // Initialize WebRTC
+            peer = new SimplePeer({
+                initiator: true,
+                stream: stream,
+                trickle: true
+            });
+            
+            peer.on('signal', async (data) => {
+                if (data.type === 'offer') {
+                    await fetch(`${SIGNAL_SERVER}?action=offer&room=${roomCode}`, {
+                        method: 'POST',
+                        body: JSON.stringify(data)
+                    });
+                } else if (data.candidate) {
+                    await fetch(`${SIGNAL_SERVER}?action=candidate&room=${roomCode}&peerId=${myPeerId}`, {
+                        method: 'POST',
+                        body: JSON.stringify(data)
+                    });
+                }
+            });
+            
+            peer.on('connect', () => {
+                document.getElementById('status').textContent = 'Connected to Chromebook!';
+            });
+            
+            // Poll for answer
+            pollForAnswer();
+        }
+        
+        async function pollForAnswer() {
+            try {
+                const response = await fetch(`${SIGNAL_SERVER}?action=getAnswer&room=${roomCode}`);
+                const data = await response.json();
+                if (data.answer) peer.signal(data.answer);
+                
+                const candResponse = await fetch(`${SIGNAL_SERVER}?action=getCandidates&room=${roomCode}&peerId=${myPeerId}`);
+                const candData = await candResponse.json();
+                candData.candidates.forEach(cand => peer.signal(cand));
+            } catch(e) {}
+            
+            setTimeout(pollForAnswer, 1000);
+        }
+        
+        init();
+    </script>
+</body>
+</html>
