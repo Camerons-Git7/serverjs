@@ -1,81 +1,188 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>iPhone Stream</title>
+    <title>Phone Screen Share</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
     <style>
-        body { margin: 0; background: #000; overflow: hidden; }
-        video { width: 100vw; height: 100vh; object-fit: cover; }
-        #status { position: fixed; top: 10px; left: 10px; color: white; background: rgba(0,0,0,0.5); padding: 10px; }
+        body { 
+            margin: 0; 
+            background: #000; 
+            overflow: hidden; 
+            font-family: sans-serif;
+        }
+        video { 
+            width: 100vw; 
+            height: 100vh; 
+            object-fit: contain; 
+            display: none; /* Hide local preview */
+        }
+        #ui {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-align: center;
+            padding: 20px;
+        }
+        #roomCode {
+            font-size: 48px;
+            font-weight: bold;
+            font-family: monospace;
+            background: rgba(0,0,0,0.3);
+            padding: 20px 40px;
+            border-radius: 15px;
+            margin: 20px 0;
+            letter-spacing: 10px;
+        }
+        #status {
+            font-size: 18px;
+            margin-top: 20px;
+            padding: 15px 30px;
+            border-radius: 10px;
+            background: rgba(0,0,0,0.2);
+        }
+        .connected { background: rgba(76, 175, 80, 0.3) !important; }
+        .error { background: rgba(244, 67, 54, 0.3) !important; }
+        button {
+            padding: 15px 30px;
+            font-size: 18px;
+            border: none;
+            border-radius: 10px;
+            background: #4CAF50;
+            color: white;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+        button:hover { background: #45a049; }
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 5px solid rgba(255,255,255,0.3);
+            border-top: 5px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
     <video id="localVideo" autoplay playsinline muted></video>
-    <div id="status">Initializing...</div>
     
+    <div id="ui">
+        <h1>📱 Phone Screen Share</h1>
+        <div id="roomCode">------</div>
+        <div id="status">Tap button to start sharing</div>
+        <button id="shareBtn" onclick="startSharing()">Share Screen</button>
+        <div id="spinner" class="spinner" style="display: none;"></div>
+    </div>
+
     <script>
         const SIGNAL_SERVER = 'https://your-infinityfree-domain.com/signal.php';
-        const roomCode = new URLSearchParams(location.search).get('room') || Math.random().toString(36).substring(2, 8);
+        const roomCode = new URLSearchParams(location.search).get('room') || 
+                        Math.random().toString(36).substring(2, 8).toUpperCase();
         const myPeerId = 'phone-' + Math.random().toString(36).substring(2, 8);
         
         let peer = null;
         let stream = null;
         
-        async function init() {
-            document.getElementById('status').textContent = 'Room: ' + roomCode;
+        // Display room code immediately
+        document.getElementById('roomCode').textContent = roomCode;
+        
+        async function startSharing() {
+            const btn = document.getElementById('shareBtn');
+            const status = document.getElementById('status');
+            const spinner = document.getElementById('spinner');
             
-            // Get camera + screen
+            btn.style.display = 'none';
+            spinner.style.display = 'block';
+            status.textContent = 'Select "Screen" when prompted...';
+            
             try {
-                stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: 'environment' }, // Use back camera
+                // Get screen share (not camera!)
+                stream = await navigator.mediaDevices.getDisplayMedia({ 
+                    video: { 
+                        cursor: "always",
+                        displaySurface: "screen" // or "window" or "browser"
+                    }, 
                     audio: false 
                 });
-                document.getElementById('localVideo').srcObject = stream;
+                
+                // Show preview
+                const video = document.getElementById('localVideo');
+                video.srcObject = stream;
+                video.style.display = 'block';
+                document.getElementById('ui').style.background = 'rgba(0,0,0,0.9)';
+                
+                status.textContent = 'Starting connection...';
+                status.className = '';
+                
+                // Create room on signaling server
+                await fetch(`${SIGNAL_SERVER}?action=create&room=${roomCode}&peerId=${myPeerId}`);
+                
+                // Initialize WebRTC
+                peer = new SimplePeer({
+                    initiator: true,
+                    stream: stream,
+                    trickle: true
+                });
+                
+                peer.on('signal', async (data) => {
+                    if (data.type === 'offer') {
+                        await fetch(`${SIGNAL_SERVER}?action=offer&room=${roomCode}`, {
+                            method: 'POST',
+                            body: JSON.stringify(data)
+                        });
+                    } else if (data.candidate) {
+                        await fetch(`${SIGNAL_SERVER}?action=candidate&room=${roomCode}&peerId=${myPeerId}`, {
+                            method: 'POST',
+                            body: JSON.stringify(data)
+                        });
+                    }
+                });
+                
+                peer.on('connect', () => {
+                    status.textContent = '✅ Connected to Chromebook!';
+                    status.className = 'connected';
+                    spinner.style.display = 'none';
+                });
+                
+                peer.on('error', (err) => {
+                    status.textContent = 'Error: ' + err.message;
+                    status.className = 'error';
+                    spinner.style.display = 'none';
+                });
+                
+                // Handle screen share stop
+                stream.getVideoTracks()[0].onended = () => {
+                    status.textContent = 'Screen sharing stopped';
+                    status.className = 'error';
+                    if (peer) peer.destroy();
+                };
+                
+                // Poll for answer
+                pollForAnswer();
+                
             } catch(e) {
-                // Fallback to screen share if available
-                try {
-                    stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-                    document.getElementById('localVideo').srcObject = stream;
-                } catch(e2) {
-                    alert('Camera/screen access denied');
-                    return;
-                }
+                status.textContent = 'Error: ' + e.message;
+                status.className = 'error';
+                spinner.style.display = 'none';
+                btn.style.display = 'block';
+                btn.textContent = 'Try Again';
             }
-            
-            // Create room on signaling server
-            await fetch(`${SIGNAL_SERVER}?action=create&room=${roomCode}&peerId=${myPeerId}`);
-            
-            // Initialize WebRTC
-            peer = new SimplePeer({
-                initiator: true,
-                stream: stream,
-                trickle: true
-            });
-            
-            peer.on('signal', async (data) => {
-                if (data.type === 'offer') {
-                    await fetch(`${SIGNAL_SERVER}?action=offer&room=${roomCode}`, {
-                        method: 'POST',
-                        body: JSON.stringify(data)
-                    });
-                } else if (data.candidate) {
-                    await fetch(`${SIGNAL_SERVER}?action=candidate&room=${roomCode}&peerId=${myPeerId}`, {
-                        method: 'POST',
-                        body: JSON.stringify(data)
-                    });
-                }
-            });
-            
-            peer.on('connect', () => {
-                document.getElementById('status').textContent = 'Connected to Chromebook!';
-            });
-            
-            // Poll for answer
-            pollForAnswer();
         }
         
         async function pollForAnswer() {
+            if (!peer || peer.destroyed) return;
+            
             try {
                 const response = await fetch(`${SIGNAL_SERVER}?action=getAnswer&room=${roomCode}`);
                 const data = await response.json();
@@ -89,7 +196,10 @@
             setTimeout(pollForAnswer, 1000);
         }
         
-        init();
+        // Auto-start if room provided in URL
+        if (new URLSearchParams(location.search).get('auto')) {
+            setTimeout(startSharing, 500);
+        }
     </script>
 </body>
 </html>
